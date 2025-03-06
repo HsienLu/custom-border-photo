@@ -1,121 +1,161 @@
 import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
-import * as ExifParser from 'exif-parser';
-import { ImageExifData } from "../types/ultis";
+import * as ExifParser from "exif-parser";
 import { createCanvas, loadImage } from "canvas";
-import * as fs from 'fs';
+import { ImageExifData } from "../types/ultis";
+// Configurable file paths
+const INPUT_PATH = "./src/public/DSC08101.jpg";
+const OUTPUT_PATH = "./src/public/output/DSC08101.jpg";
 
 
-async function readImageExif(readFilePath: string) {
-    try {
-        const filePath = join(readFilePath);
-     
-        const image = await readFile(filePath);
+/**
+ * 將 EXIF 的 Unix 時間戳轉換為可讀日期字串
+ */
+function formatExifDate(timestamp: number): string | undefined {
+  if (!timestamp) {
+    console.warn("DateTimeOriginal tag not found");
+    return undefined;
+  }
+  const exifDate = new Date(timestamp * 1000);
+  const formattedDate = exifDate.toLocaleDateString("en", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const formattedTime = exifDate.toLocaleTimeString("en", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  return `${formattedDate} ${formattedTime}`;
+}
 
+/**
+ * 讀取檔案並回傳 Buffer
+ */
+async function loadImageBuffer(filePath: string): Promise<Buffer> {
+  const absolutePath = join(filePath);
+  return await readFile(absolutePath);
+}
 
-        // 解析 EXIF 資訊
-        const parser = ExifParser.create(image);
-        const result = parser.parse();
-        console.log('exif:',result)
-        const tags = result.tags;
-        // 提取日期
-        function getExifDate(DateTimeOriginal:number) {
-            
-            if (DateTimeOriginal) {
-                const exifDate = new Date(DateTimeOriginal * 1000); // EXIF 日期通常是 Unix 時間戳，需乘以 1000 轉換為毫秒
-                const formattedDate =exifDate.toLocaleDateString('en',{
-                    year: 'numeric',
-                    month:'2-digit',
-                    day:'2-digit',
-                })
-                const formattedTime = exifDate.toLocaleTimeString('en',{
-                    hour:'2-digit',
-                    minute:'2-digit',
-                    second:'2-digit',
-                    hour12:false,
-                })
-    
-                return `${formattedDate} ${formattedTime}`
-                
-            } else {
-                console.log('DateTimeOriginal tag not found');
-            }
-        }
-
-        const shotDate=getExifDate(tags.DateTimeOriginal)
-        const Make=tags.Make
-        const Model=tags.Model
-        const ExposureTime = tags.ExposureTime
+/**
+ * 從圖片 Buffer 中解析 EXIF 資料
+ */
+function parseExifData(imageBuffer: Buffer): ImageExifData | null {
+  try {
+    const parser = ExifParser.create(imageBuffer);
+    const result = parser.parse();
+    const { tags, imageSize } = result;
+    const shotDate = formatExifDate(tags.DateTimeOriginal);
+    const exposureTime =
+      tags.ExposureTime != null
         ? tags.ExposureTime < 1
           ? `1/${Math.round(1 / tags.ExposureTime)}`
           : tags.ExposureTime.toString()
         : undefined;
-        const ISO=tags.ISO
-        const FocalLength=tags.FocalLength
-        const DateTimeOriginal=tags.DateTimeOriginal
-        const LensModel=tags.LensModel
-        const imageSizrHeight=result.imageSize.height
-        const imageSizeWidth=result.imageSize.width
-        await writeFile('./src/public/output/DSC08101.jpg', image);
-        const data={
-            shotDate,
-            Make,
-            Model,
-            ExposureTime,
-            ISO,
-            FocalLength,
-            DateTimeOriginal,
-            LensModel,
-            imageSizrHeight,
-            imageSizeWidth,
-            image
-        }
-        return data
-    } catch (e) {
-        console.error('Error reading image:', e);
-    }
+
+    return {
+      shotDate,
+      Make: tags.Make,
+      Model: tags.Model,
+      ExposureTime: exposureTime,
+      ISO: tags.ISO,
+      FocalLength: tags.FocalLength,
+      DateTimeOriginal: tags.DateTimeOriginal,
+      LensModel: tags.LensModel,
+      imageSizeHeight: imageSize.height,
+      imageSizeWidth: imageSize.width,
+      image: imageBuffer,
+    };
+  } catch (error) {
+    console.error("Error parsing EXIF data:", error);
+    return null;
+  }
 }
-async function drawImageWithBorder(imgData: ImageExifData) {
-    console.log(imgData);
-    
-    const borderSize = 200;
-    const bottomPadding = 300; 
-    const fromBottomPadding = 400;
-    const width = (imgData.imageSizeWidth ?? 800)+ borderSize * 2;
-    const height = (imgData.imageSizrHeight?? 600 )+ borderSize * 2+ bottomPadding;
-    const image = await loadImage(Buffer.from(imgData.image)) 
-    const canvas=createCanvas(width,height)
-    const ctx=canvas.getContext('2d')
-    ctx.fillStyle='white'
-    ctx.fillRect(0, 0, width, height);    
-    ctx.drawImage(image, borderSize, borderSize);
-    const fontSize=72;
-    ctx.font = `${fontSize}px Arial`;
-    ctx.fillStyle='black';
-    ctx.textAlign='center';
-    const text=`${imgData.Make} ${imgData.Model}`;
-    const text2=`ISO ${imgData.ISO} ${imgData.ExposureTime} ${imgData.FocalLength}mm`;
-    const text3=`${imgData.LensModel}`;
-    const lineHeight = fontSize*1.5; // 每行文字的高度
-    let currentY = height - fromBottomPadding; // 初始Y座標
-    ctx.fillText(text, width / 2, currentY);
-    currentY += lineHeight; // 增加Y座標
-    ctx.fillText(text2, width / 2, currentY);
-    currentY += lineHeight; // 增加Y座標
-    ctx.fillText(text3, width / 2, currentY);
-    const buffer =canvas.toBuffer('image/jpeg')
-    fs.writeFileSync('./src/public/output/DSC08101.jpg',buffer)
+
+/**
+ * 使用 Canvas 產生帶有邊框與文字資訊的圖片
+ * @param exifData - 從圖片中解析出的 EXIF 資料
+ * @param config - 可調整邊框大小、底部填充等參數
+ */
+async function createImageWithBorder(
+  exifData: ImageExifData,
+  config?: { borderSize?: number; bottomPadding?: number; textPadding?: number }
+): Promise<Buffer> {
+  // 預設參數
+  const borderSize = config?.borderSize ?? 200;
+  const bottomPadding = config?.bottomPadding ?? 300;
+  const textAreaHeightFromBottom = config?.textPadding ?? 400;
+
+  const imageWidth = exifData.imageSizeWidth ?? 800;
+  const imageHeight = exifData.imageSizeHeight ?? 600;
+  const canvasWidth = imageWidth + borderSize * 2;
+  const canvasHeight = imageHeight + borderSize * 2 + bottomPadding;
+
+  // 載入圖片並建立畫布
+  const image = await loadImage(exifData.image);
+  const canvas = createCanvas(canvasWidth, canvasHeight);
+  const ctx = canvas.getContext("2d");
+
+  // 畫白色背景
+  ctx.fillStyle = "white";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // 繪製原始圖片
+  ctx.drawImage(image, borderSize, borderSize);
+
+  // 繪製文字資訊
+  const fontSizeTitle = 96;
+  const fontSizeInfo = 72;
+  const paddingTop = 54; // 文字區域的上方 padding
+  let currentY = canvasHeight - textAreaHeightFromBottom + paddingTop;
+  const lineHeight = fontSizeInfo * 1.8;
+
+  // 標題：相機品牌與型號
+  ctx.font = `${fontSizeTitle}px Arial`;
+  ctx.fillStyle = "black";
+  ctx.textAlign = "center";
+  const titleText = `${exifData.Make} ${exifData.Model}`;
+  ctx.fillText(titleText, canvasWidth / 2, currentY);
+
+  // 次要資訊：ISO、曝光、焦距與鏡頭型號
+  currentY += lineHeight;
+  ctx.font = `${fontSizeInfo}px Arial`;
+  ctx.fillStyle = "#CCC";
+  const infoText = `ISO ${exifData.ISO} ${exifData.ExposureTime} ${exifData.FocalLength}mm   ${exifData.LensModel}`;
+  ctx.fillText(infoText, canvasWidth / 2, currentY);
+
+  // 額外資訊（這裡再示範一行，可根據需要修改或刪除）
+  currentY += lineHeight;
+  ctx.fillText(`${exifData.LensModel}`, canvasWidth / 2, currentY);
+
+  return canvas.toBuffer("image/jpeg");
 }
+
+/**
+ * 將 Buffer 寫入指定檔案
+ */
+async function saveImageBuffer(filePath: string, buffer: Buffer): Promise<void> {
+  await writeFile(filePath, buffer);
+}
+
+/**
+ * 主流程：讀取圖片、解析 EXIF、生成新圖片、並儲存結果
+ */
 async function main() {
-    const data = await readImageExif('./src/public/DSC08101.jpg'); // 讀取圖像的 EXIF 資料
-    
-    if (data) {
-        drawImageWithBorder(data); // 如果成功讀取到資料，則繪製圖像和邊框
-    } else {
-        console.error('Failed to read image EXIF data.'); // 如果讀取失敗，則輸出錯誤訊息
+  try {
+    const imageBuffer = await loadImageBuffer(INPUT_PATH);
+    const exifData = parseExifData(imageBuffer);
+    if (!exifData) {
+      throw new Error("Failed to extract EXIF data.");
     }
+    const outputBuffer = await createImageWithBorder(exifData);
+    await saveImageBuffer(OUTPUT_PATH, outputBuffer);
+    console.log("Image processing completed successfully.");
+  } catch (error) {
+    console.error("Error in image processing pipeline:", error);
+  }
 }
-
-
 
 main();
